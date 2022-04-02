@@ -12,6 +12,7 @@ from monai.data import CSVSaver, ImageDataset
 from monai.transforms import AddChannel, Compose, Resize, ScaleIntensity, EnsureType
 from monai.transforms.croppad.array import CenterSpatialCrop, RandSpatialCrop
 from resnet_3d import resnet50
+# from resnet import resnet50
 import nibabel as nib
 import pydicom
 import torch.nn.functional as F
@@ -67,9 +68,9 @@ def get_truth_data(dcm_path):
     x_min, y_min, z_min = xyz_min
     if z_min < 31:
         z_min = 31
-
+    z_min = 20 
     all_dcm_length = len(os.listdir(dcm_path))
-    z_max = all_dcm_length - 17
+    z_max = all_dcm_length #- 17
 
     dcm_list = os.listdir(dcm_path)
     dcm_list.sort()
@@ -99,6 +100,7 @@ def detect_broken_index(broken_layer_data_path, broken_layer_name, device):
     model = resnet50(spatial_dims=3, n_input_channels=1, num_classes=2, out_channels=6).to(device)
 
     model.load_state_dict(torch.load("./checkpoints/model_axis_datasets_resnet50_epoch20_20220104.pth"))
+    # model.load_state_dict(torch.load("/mnt/users/code/detect_broken_layer/image_classification/checkpoints/axis_3d_center112_resnet50_0331/model_axis_datasets_resnet50_best_20220331.pth"))
     model.eval()
     probability = 0
     broken_index = []
@@ -134,9 +136,7 @@ def detect_broken_index(broken_layer_data_path, broken_layer_name, device):
                 index = ind + i + 1
                 print(i, index)
                 if pred[0, ind] > probability:
-                    probability = pred[0, ind]
-                if index < 50:
-                    continue
+                    probability = pred[0, ind]                
                 if index not in broken_index:
                     broken_index.append(index)
 
@@ -241,8 +241,9 @@ def fix_register(movings, fixed, device):
 
     # model = '/mnt/users/code/voxelmorph/scripts/torch/models/model_2D_0323_mse/3200.pth'
     # model = '/mnt/users/code/voxelmorph/scripts/torch/models/model_2D_0324_mse_bs4/1750.pth'
-    model = '/mnt/users/code/voxelmorph/scripts/torch/models/model_2D_0324_mse_bs4/1890.pth'
-    # device = torch.device("cuda:7" if torch.cuda.is_available() else "cpu")
+    # model = '/mnt/users/code/voxelmorph/scripts/torch/models/model_2D_0324_mse_bs4/1890.pth'
+    model = '/mnt/users/code/voxelmorph/scripts/torch/models/model_2D_0331/6670.pth'
+   
     # load and set up model
     model = VxmDense.load(model, device)
     model.to(device)
@@ -257,7 +258,7 @@ def fix_register(movings, fixed, device):
 
     # predict
     moved, warp = model(input_moving, input_fixed, registration=True)
-    print(warp)
+    # print(warp)
     # save moved image
     # moved = moved.detach().cpu().numpy().squeeze()
     # moved = moved * (Max - Min) + Min
@@ -290,31 +291,37 @@ def fix_broken_layer(broken_layer_data_path, broken_layer_name, origin_broken_la
     dcm_list = os.listdir(dcm_path)
     dcm_list.sort()
     min_dcm_start_value = int(dcm_list[0].split('.')[0])
-    broken_layer_index = [origin_broken_layer_index[0]]
-    for index in origin_broken_layer_index[1:]:
+    broken_layer_index = []
+    for index in origin_broken_layer_index:
         index = int(index)
-        if index - broken_layer_index[-1] > 0:
+        if index < 0:
+            continue
+        else:
             broken_layer_index.append(index)
-    all_offsets = []
-    broken_offsets = np.zeros((512, 512, 2))
-    for broken_index in broken_layer_index:
-        moving_datas, fix_datas = divide_datas(broken_index, dcm_path, all_dcm_length, min_dcm_start_value)
-        moving_datas = np.transpose(moving_datas, (1, 0))
-        fix_datas = np.transpose(fix_datas, (1, 0))
-        # fix_datas = generate_fix_datas(broken_index, moving_datas, six_datas, device)       
-        warp = fix_register(moving_datas, fix_datas, device).detach().cpu().numpy()
-        warp = warp.squeeze()
-        warp = np.transpose(warp, (1, 2, 0))
-        # warp = warp[::-1, ::-1]
-        print(warp[90,192])
-        broken_offsets = warp
-        all_offsets.append(broken_offsets)
+    # all_offsets = []
+    # broken_offsets = np.zeros((512, 512, 2))
+    # for broken_index in broken_layer_index:
+    #     moving_datas, fix_datas = divide_datas(broken_index, dcm_path, all_dcm_length, min_dcm_start_value)
+    #     moving_datas = np.transpose(moving_datas, (1, 0))
+    #     fix_datas = np.transpose(fix_datas, (1, 0))
+    #     # fix_datas = generate_fix_datas(broken_index, moving_datas, six_datas, device)       
+    #     warp = fix_register(moving_datas, fix_datas, device).detach().cpu().numpy()
+    #     warp = warp.squeeze()
+    #     warp = np.transpose(warp, (1, 2, 0))
+    #     # warp = warp[::-1, ::-1]
+    #     print(warp[90,192])
+    #     broken_offsets = warp
+    #     all_offsets.append(broken_offsets)
 
     print('broken_layer_index', broken_layer_index)
-    all_xy_coordinates = compute_offsets(broken_layer_index, all_offsets)
+    # all_xy_coordinates = compute_offsets(broken_layer_index, all_offsets)
     
     start_index = 0
-    origin = np.zeros((512,512,32))
+    # origin = np.zeros((512,512,32))
+    origin_datas = np.zeros((512, 512, all_dcm_length))
+    for l in range(all_dcm_length):
+        data, origin_dcm_path = load_dicom(l, dcm_path, min_dcm_start_value)   
+        origin_datas[:, :, l] = data
     for l in range(all_dcm_length):
         if l+1 < broken_layer_index[0]:
             data, origin_dcm_path = load_dicom(l, dcm_path, min_dcm_start_value)   
@@ -322,9 +329,26 @@ def fix_broken_layer(broken_layer_data_path, broken_layer_name, origin_broken_la
             #     origin[:,:,l+1-broken_layer_index[0]+31] = np.transpose(data, (1, 0))
 
         elif l+1 >= broken_layer_index[start_index]:
+            if l+1 == broken_layer_index[start_index]:
+                moving_datas, fix_datas = origin_datas[:, :, l], origin_datas[:, :, l-1]
+                moving_datas = np.transpose(moving_datas, (1, 0))
+                fix_datas = np.transpose(fix_datas, (1, 0))
+
+                warp = fix_register(moving_datas, fix_datas, device).detach().cpu().numpy()
+                warp = warp.squeeze()
+                warp = np.transpose(warp, (1, 2, 0))
+                xy_offsets = np.zeros(warp.shape)
+                for i in range(warp.shape[0]):
+                    for j in range(warp.shape[1]):
+                        # print(np.array([i, j]))
+                        # print('offsets', offsets[i, j])
+                        xy_offsets[i, j] = (i, j) + warp[i, j] 
+                
             data, origin_dcm_path = load_dicom(l, dcm_path, min_dcm_start_value)
-            data = cv2.remap(np.array(np.transpose(data, (1, 0)), np.float32), np.array(all_xy_coordinates[start_index][:, :, 1], np.float32), np.array(all_xy_coordinates[start_index][:, :, 0], np.float32), cv2.INTER_LINEAR)        
+            data = cv2.remap(np.array(np.transpose(data, (1, 0)), np.float32), np.array(xy_offsets[:, :, 1], np.float32), np.array(xy_offsets[:, :, 0], np.float32), cv2.INTER_LINEAR)                    
             data = np.transpose(data, (1, 0))
+            origin_datas[:, :, l] = data
+            
             # if l+1 == broken_layer_index[start_index]:
             #     origin[:,:,-1] = np.transpose(data, (1, 0))
             #     broken_layer_name = '1287300/9C7195D2/3443F930'
@@ -337,7 +361,7 @@ def fix_broken_layer(broken_layer_data_path, broken_layer_name, origin_broken_la
                 # print('start_index', start_index)
 
         pid_sid = dcm_path.split('/')[6] + '_' + dcm_path.split('/')[7] + '_' + dcm_path.split('/')[8] 
-        new_dcm_path = os.path.join('/mnt/data/zhangyongming/lz/truth_broken_datas/fix_truth_broken_datas', pid_sid) #fix_truth_broken_2Dvoxelmorph
+        new_dcm_path = os.path.join('/mnt/data/zhangyongming/lz/truth_broken_datas/fix_truth_broken_2Dvoxelmorph', pid_sid) #fix_truth_broken_2Dvoxelmorph  fix_truth_broken_datas
         if not os.path.exists(new_dcm_path):
             os.makedirs(new_dcm_path)
         save_dcm(os.path.join(new_dcm_path, str(l+min_dcm_start_value)+'.dcm'), data, origin_dcm_path)
@@ -353,11 +377,14 @@ def main():
     'lz01674/7679B8CC/BEEEC38D', 'lz00422/4DAEAFF7/68274FBC', 'lz01536/5BFEE925/57E94268', 'lz01146/FB44FB28/3DF2DECA', 'lz01084/D35715F3/59E972B6', 'lz00325/3EFE733F/ACA60F72', 'lz01838/964AE090/2F150A32', 
     'lz01428/F972548C/662F6F14', 'lz00262/9E9C27ED/9E0AFB62', 'lz01692/1192DF74/F858DFFC', 'lz01056/347ADABC/012F295E', 'lz00464/6F8E820E/C5F6416C', 'lz00421/F2BCB29E/365A913C', 'lz00338/AB6D8322/86195141', 
     'lz00765/5ECFED77/EA8A793F', 'lz00868/6D8E837F/43FBAD66', 'lz00382/98089BE5/51D66757', 'lz01046/2FEC1B1B/E551CE98', 'lz00619/6E7133CE/96F385D1', 'lz01126/36874D57/B1E9619B', 'lz01160/14F257BE/A1BB6E1E', 
-    'lz00256/1957E16D/22E5482C', 'lz00715/5DD2A85E/33CA13B7', 'lz01081/BC910B89/DC7C5B67', 'lz00614/B0B17CFB/4A463519', 'lz00376/FA0C0C29/3FFBE129', 'lz00157/DCF607E3/7793A8E9', 'lz00327/66D35F8A/EFBBC5D0'] #'lz00327/66D35F8A/EFBBC5D0'
-    # broken_layer_data_dir = ['1287300/9C7195D2/3443F930', '1287303/72FE4FE1/062EE826', '1287302/F9E9D907/8CB01A64',
-    #     'AW1183694326.357.1623962658/1D20FDF3/3ABEBFDC', '1334004/B937AB30/B937AB32', '1287305/6C2BF372/10AA4CEA', 
-    #     '1287301/71A19987/798AC981'] 
-    broken_layer_data_dir = ['1287305/6C2BF372/10AA4CEA']
+    'lz00256/1957E16D/22E5482C', 'lz00715/5DD2A85E/33CA13B7', 'lz01081/BC910B89/DC7C5B67', 'lz00614/B0B17CFB/4A463519', 'lz00376/FA0C0C29/3FFBE129', 'lz00157/DCF607E3/7793A8E9', 'lz00327/66D35F8A/EFBBC5D0'] 
+
+    # broken_layer_data_dir = [
+    # 'lz01428/F972548C/662F6F14', 'lz00262/9E9C27ED/9E0AFB62', 'lz01692/1192DF74/F858DFFC', 'lz00464/6F8E820E/C5F6416C', 'lz00421/F2BCB29E/365A913C', 'lz00338/AB6D8322/86195141', 
+    # 'lz00765/5ECFED77/EA8A793F', 'lz00868/6D8E837F/43FBAD66', 'lz00382/98089BE5/51D66757', 'lz01046/2FEC1B1B/E551CE98', 'lz00619/6E7133CE/96F385D1', 'lz01126/36874D57/B1E9619B', 'lz01160/14F257BE/A1BB6E1E', 
+    # 'lz00256/1957E16D/22E5482C', 'lz00715/5DD2A85E/33CA13B7', 'lz01081/BC910B89/DC7C5B67', 'lz00614/B0B17CFB/4A463519', 'lz00376/FA0C0C29/3FFBE129', 'lz00157/DCF607E3/7793A8E9', 'lz00327/66D35F8A/EFBBC5D0'] 
+    
+    broken_layer_data_dir = broken_layer_data_dir[:3]
 
     device = torch.device("cuda:4" if torch.cuda.is_available() else "cpu")
     all_detect_broken_layer_time = []
@@ -367,7 +394,7 @@ def main():
         start = time.time()
         print(os.path.join(broken_layer_data_path, broken_layer_name))
         
-        probability, broken_index = 1, [82, 90, 124, 165, 174]#detect_broken_index(broken_layer_data_path, broken_layer_name, device)
+        probability, broken_index = detect_broken_index(broken_layer_data_path, broken_layer_name, device)
         print('max probability, broken_index', probability, broken_index)
 
         detect_broken_layer_time = time.time() - start
